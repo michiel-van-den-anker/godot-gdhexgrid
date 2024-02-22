@@ -7,12 +7,12 @@ var map
 # This is the hex map we'll test with:
 # remember: +y is N, +x is NE
 """
-	                     .
-	                  .
-	               .     .
-	            .     .
-	         .     .     .
-	      .     .     .
+						 .
+					  .
+				   .     .
+				.     .
+			 .     .     .
+		  .     .     .
 	   .     .     .     .
 	.     O     B     .
 	   OF    O     .     C
@@ -41,7 +41,7 @@ var obstacles = [
 	Vector2(2, 3),
 ]
 
-func setup():
+func before_each():
 	grid = HexGrid.new()
 	grid.set_bounds(Vector2(0, 0), Vector2(7, 4))
 	grid.add_obstacles(obstacles)

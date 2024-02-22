@@ -3,10 +3,9 @@ extends Node2D
 
 var HexGrid = preload("./HexGrid.gd").new()
 
-onready var highlight = get_node("Highlight")
-onready var area_coords = get_node("Highlight/AreaCoords")
-onready var hex_coords = get_node("Highlight/HexCoords")
-
+@onready var highlight = $"Highlight"
+@onready var area_coords = $"Highlight/AreaCoords"
+@onready var hex_coords = $"Highlight/HexCoords"
 
 func _ready():
 	HexGrid.hex_scale = Vector2(50, 50)

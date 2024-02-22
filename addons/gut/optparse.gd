@@ -1,31 +1,31 @@
-################################################################################
+# ##############################################################################
 #(G)odot (U)nit (T)est class
 #
-################################################################################
-#The MIT License (MIT)
-#=====================
+# ##############################################################################
+# The MIT License (MIT)
+# =====================
 #
-#Copyright (c) 2019 Tom "Butch" Wesley
+# Copyright (c) 2020 Tom "Butch" Wesley
 #
-#Permission is hereby granted, free of charge, to any person obtaining a copy
-#of this software and associated documentation files (the "Software"), to deal
-#in the Software without restriction, including without limitation the rights
-#to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-#copies of the Software, and to permit persons to whom the Software is
-#furnished to do so, subject to the following conditions:
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
 #
-#The above copyright notice and this permission notice shall be included in
-#all copies or substantial portions of the Software.
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
 #
-#THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-#IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-#FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-#AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-#LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-#OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-#THE SOFTWARE.
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
 #
-################################################################################
+# ##############################################################################
 # Description
 # -----------
 # Command line interface for the GUT unit testing tool.  Allows you to run tests
@@ -36,9 +36,7 @@
 #
 # See the readme for a list of options and examples.  You can also use the -gh
 # option to get more information about how to use the command line interface.
-#
-# Version 6.7.0
-################################################################################
+# ##############################################################################
 
 #-------------------------------------------------------------------------------
 # Parses the command line arguments supplied into an array that can then be
@@ -46,11 +44,16 @@
 #-------------------------------------------------------------------------------
 class CmdLineParser:
 	var _used_options = []
+	# an array of arrays.  Each element in this array will contain an option
+	# name and if that option contains a value then it will have a sedond
+	# element.  For example:
+	# 	[[-gselect, test.gd], [-gexit]]
 	var _opts = []
 
 	func _init():
 		for i in range(OS.get_cmdline_args().size()):
-			_opts.append(OS.get_cmdline_args()[i])
+			var opt_val = OS.get_cmdline_args()[i].split('=')
+			_opts.append(opt_val)
 
 	# Parse out multiple comma delimited values from a command line
 	# option.  Values are separated from option name with "=" and
@@ -63,10 +66,8 @@ class CmdLineParser:
 	# Parse out the value of an option.  Values are separated from
 	# the option name with "="
 	func _parse_option_value(full_option):
-		var split = full_option.split('=')
-
-		if(split.size() > 1):
-			return split[1]
+		if(full_option.size() > 1):
+			return full_option[1]
 		else:
 			return null
 
@@ -77,7 +78,7 @@ class CmdLineParser:
 		var idx = 0
 
 		while(idx < _opts.size() and !found):
-			if(_opts[idx].find(name) == 0):
+			if(_opts[idx][0] == name):
 				found = true
 			else:
 				idx += 1
@@ -93,11 +94,11 @@ class CmdLineParser:
 		var opt_loc = find_option(option)
 		if(opt_loc != -1):
 			to_return = _parse_array_value(_opts[opt_loc])
-			_opts.remove(opt_loc)
+			_opts.remove_at(opt_loc)
 
 		return to_return
 
-	# returns the value of an option if it was specfied, null otherwise.  This
+	# returns the value of an option if it was specified, null otherwise.  This
 	# used to return the default but that became problemnatic when trying to
 	# punch through the different places where values could be specified.
 	func get_value(option):
@@ -106,7 +107,7 @@ class CmdLineParser:
 		var opt_loc = find_option(option)
 		if(opt_loc != -1):
 			to_return = _parse_option_value(_opts[opt_loc])
-			_opts.remove(opt_loc)
+			_opts.remove_at(opt_loc)
 
 		return to_return
 
@@ -123,17 +124,20 @@ class CmdLineParser:
 	func get_unused_options():
 		var to_return = []
 		for i in range(_opts.size()):
-			to_return.append(_opts[i].split('=')[0])
+			to_return.append(_opts[i][0])
 
-		var script_option = to_return.find('-s')
-		to_return.remove(script_option + 1)
-		to_return.remove(script_option)
+		var script_option = to_return.find("-s")
+		if script_option == -1:
+			script_option = to_return.find("--script")
+		if script_option != -1:
+			to_return.remove_at(script_option + 1)
+			to_return.remove_at(script_option)
 
 		while(_used_options.size() > 0):
 			var index = to_return.find(_used_options[0].split("=")[0])
 			if(index != -1):
-				to_return.remove(index)
-			_used_options.remove(0)
+				to_return.remove_at(index)
+			_used_options.remove_at(0)
 
 		return to_return
 
@@ -146,15 +150,15 @@ class Option:
 	var default = null
 	var description = ''
 
-	func _init(name, default_value, desc=''):
+	func _init(name,default_value,desc=''):
 		option_name = name
 		default = default_value
 		description = desc
 		value = null#default_value
 
-	func pad(value, size, pad_with=' '):
-		var to_return = value
-		for i in range(value.length(), size):
+	func pad(to_pad, size, pad_with=' '):
+		var to_return = to_pad
+		for _i in range(to_pad.length(), size):
 			to_return += pad_with
 
 		return to_return
@@ -233,10 +237,12 @@ func parse():
 				options[i].value = parser.get_array_value(options[i].option_name)
 			elif(t == TYPE_BOOL):
 				options[i].value = parser.was_specified(options[i].option_name)
+			elif(t == TYPE_FLOAT):
+				options[i].value = parser.get_value(options[i].option_name)
 			elif(t == TYPE_NIL):
 				print(options[i].option_name + ' cannot be processed, it has a nil datatype')
 			else:
-				print(options[i].option_name + ' cannot be processsed, it has unknown datatype:' + str(t))
+				print(options[i].option_name + ' cannot be processed, it has unknown datatype:' + str(t))
 
 	var unused = parser.get_unused_options()
 	if(unused.size() > 0):

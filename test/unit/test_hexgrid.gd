@@ -7,7 +7,7 @@ var grid
 var w
 var h
 
-func setup():
+func before_each():
 	cell = HexCell.new()
 	grid = HexGrid.new()
 	w = grid.hex_size.x

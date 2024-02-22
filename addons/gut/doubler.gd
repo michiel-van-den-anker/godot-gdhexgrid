@@ -1,217 +1,244 @@
 # ------------------------------------------------------------------------------
-# Utility class to hold the local and built in methods seperately.  Add all local
-# methods FIRST, then add built ins.
+# A stroke of genius if I do say so.  This allows for doubling a scene without
+# having  to write any files.  By overloading the "instantiate" method  we can
+# make whatever we want.
 # ------------------------------------------------------------------------------
-class ScriptMethods:
-	# List of methods that should not be overloaded when they are not defined
-	# in the class being doubled.  These either break things if they are
-	# overloaded or do not have a "super" equivalent so we can't just pass
-	# through.
-	var _blacklist = [
-		'has_method',
-		'get_script',
-		'get',
-		'_notification',
-		'get_path',
-		'_enter_tree',
-		'_exit_tree',
-		'_process',
-		'_draw',
-		'_physics_process',
-		'_input',
-		'_unhandled_input',
-		'_unhandled_key_input',
-		'_set',
-		'_get', # probably
-		'emit_signal', # can't handle extra parameters to be sent with signal.
-	]
+class PackedSceneDouble:
+	extends PackedScene
+	var _script =  null
+	var _scene = null
 
-	var built_ins = []
-	var local_methods = []
-	var _method_names = []
+	func set_script_obj(obj):
+		_script = obj
 
-	func is_blacklisted(method_meta):
-		return _blacklist.find(method_meta.name) != -1
+	func instantiate(edit_state=0):
+		var inst = _scene.instantiate(edit_state)
+		var export_props = []
+		var script_export_flag = (PROPERTY_USAGE_STORAGE | PROPERTY_USAGE_EDITOR | PROPERTY_USAGE_SCRIPT_VARIABLE)
 
-	func _add_name_if_does_not_have(method_name):
-		var should_add = _method_names.find(method_name) == -1
-		if(should_add):
-			_method_names.append(method_name)
-		return should_add
+		if(_script !=  null):
+			if(inst.get_script() != null):
+				# Get all the exported props and values so we can set them again
+				for prop in inst.get_property_list():
+					var is_export = prop.usage & (script_export_flag) == script_export_flag
+					if(is_export):
+						export_props.append([prop.name, inst.get(prop.name)])
 
-	func add_built_in_method(method_meta):
-		var did_add = _add_name_if_does_not_have(method_meta.name)
-		if(did_add and !is_blacklisted(method_meta)):
-			built_ins.append(method_meta)
+			inst.set_script(_script)
+			for exported_value in export_props:
+				print('setting ', exported_value)
+				inst.set(exported_value[0], exported_value[1])
 
-	func add_local_method(method_meta):
-		var did_add = _add_name_if_does_not_have(method_meta.name)
-		if(did_add):
-			local_methods.append(method_meta)
+		return inst
 
-	func to_s():
-		var text = "Locals\n"
-		for i in range(local_methods.size()):
-			text += str("  ", local_methods[i].name, "\n")
-		text += "Built-Ins\n"
-		for i in range(built_ins.size()):
-			text += str("  ", built_ins[i].name, "\n")
-		return text
+	func load_scene(path):
+		_scene = load(path)
 
-# ------------------------------------------------------------------------------
-# Helper class to deal with objects and inner classes.
-# ------------------------------------------------------------------------------
-class ObjectInfo:
-	var _path = null
-	var _subpaths = []
-	var _utils = load('res://addons/gut/utils.gd').new()
 
-	func _init(path, subpath=null):
-		_path = path
-		if(subpath != null):
-			_subpaths = _utils.split_string(subpath, '/')
-
-	# Returns an instance of the class/inner class
-	func instantiate():
-		return get_loaded_class().new()
-
-	# Can't call it get_class because that is reserved so it gets this ugly name.
-	# Loads up the class and then any inner classes to give back a reference to
-	# the desired Inner class (if there is any)
-	func get_loaded_class():
-		var LoadedClass = load(_path)
-		for i in range(_subpaths.size()):
-			LoadedClass = LoadedClass.get(_subpaths[i])
-		return LoadedClass
-
-	func to_s():
-		return str(_path, '[', get_subpath(), ']')
-
-	func get_path():
-		return _path
-
-	func get_subpath():
-		return _utils.join_array(_subpaths, '/')
-
-	func has_subpath():
-		return _subpaths.size() != 0
-
-	func get_extends_text():
-		var extend = str("extends '", get_path(), '\'')
-		if(has_subpath()):
-			extend += str('.', get_subpath().replace('/', '.'))
-		return extend
 
 
 # ------------------------------------------------------------------------------
 # START Doubler
 # ------------------------------------------------------------------------------
-var _output_dir = null
-var _stubber = null
-var _double_count = 0 # used in making files names unique
-var _use_unique_names = true
-var _spy = null
+var _utils = load('res://addons/gut/utils.gd').get_instance()
+var _base_script_text = _utils.get_file_as_text('res://addons/gut/double_templates/script_template.txt')
+var _script_collector = _utils.ScriptCollector.new()
+# used by tests for debugging purposes.
+var print_source = false
+var inner_class_registry = _utils.InnerClassRegistry.new()
 
-var _utils = load('res://addons/gut/utils.gd').new()
+# ###############
+# Properties
+# ###############
+var _stubber = _utils.Stubber.new()
+func get_stubber():
+	return _stubber
+func set_stubber(stubber):
+	_stubber = stubber
+
 var _lgr = _utils.get_logger()
-var _method_maker = _utils.MethodMaker.new()
+func get_logger():
+	return _lgr
+func set_logger(logger):
+	_lgr = logger
+	_method_maker.set_logger(logger)
+
+var _spy = null
+func get_spy():
+	return _spy
+func set_spy(spy):
+	_spy = spy
+
+var _gut = null
+func get_gut():
+	return _gut
+func set_gut(gut):
+	_gut = gut
+
 var _strategy = null
-var _swapped_out_strategy = null
+func get_strategy():
+	return _strategy
+func set_strategy(strategy):
+	if(GutUtils.DOUBLE_STRATEGY.values().has(strategy)):
+		_strategy = strategy
+	else:
+		_lgr.error(str('doubler.gd:  invalid double strategy ', strategy))
 
-func _temp_strategy(strat):
-	_swapped_out_strategy = _strategy
-	_strategy = strat
 
-func _restore_strategy():
-	_strategy = _swapped_out_strategy
+var _method_maker = _utils.MethodMaker.new()
+func get_method_maker():
+	return _method_maker
 
-
-func _init(strategy=_utils.DOUBLE_STRATEGY.PARTIAL):
-	# make sure _method_maker gets logger too
-	set_logger(_utils.get_logger())
-	_strategy = strategy
+var _ignored_methods = _utils.OneToMany.new()
+func get_ignored_methods():
+	return _ignored_methods
 
 # ###############
 # Private
 # ###############
+func _init(strategy=_utils.DOUBLE_STRATEGY.SCRIPT_ONLY):
+	set_logger(_utils.get_logger())
+	_strategy = strategy
+
+
 func _get_indented_line(indents, text):
 	var to_return = ''
-	for i in range(indents):
+	for _i in range(indents):
 		to_return += "\t"
 	return str(to_return, text, "\n")
 
-func _write_file(obj_info, dest_path, override_path=null):
-	var script_methods = _get_methods(obj_info)
 
-	var metadata = _get_stubber_metadata_text(obj_info)
-	if(override_path):
-		metadata = _get_stubber_metadata_text(obj_info, override_path)
+func _stub_to_call_super(parsed, method_name):
+	if(!parsed.get_method(method_name).is_eligible_for_doubling()):
+		return
 
-	var f = File.new()
-	f.open(dest_path, f.WRITE)
-
-
-	f.store_string(str(obj_info.get_extends_text(), "\n"))
-	f.store_string(metadata)
-	for i in range(script_methods.local_methods.size()):
-		f.store_string(_get_func_text(script_methods.local_methods[i]))
-	for i in range(script_methods.built_ins.size()):
-		f.store_string(_get_super_func_text(script_methods.built_ins[i]))
-	f.close()
-
-func _double_scene_and_script(target_path, dest_path):
-	var dir = Directory.new()
-	dir.copy(target_path, dest_path)
-
-	var inst = load(target_path).instance()
-	var script_path = null
-	if(inst.get_script()):
-		script_path = inst.get_script().get_path()
-	inst.free()
-
-	if(script_path):
-		var oi = ObjectInfo.new(script_path)
-		var double_path = _double(oi, target_path)
-		var dq = '"'
-		var f = File.new()
-		f.open(dest_path, f.READ)
-		var source = f.get_as_text()
-		f.close()
-
-		source = source.replace(dq + script_path + dq, dq + double_path + dq)
-
-		f.open(dest_path, f.WRITE)
-		f.store_string(source)
-		f.close()
-
-	return script_path
-
-func _get_methods(object_info):
-	var obj = object_info.instantiate()
-	# any mehtod in the script or super script
-	var script_methods = ScriptMethods.new()
-	var methods = obj.get_method_list()
-
-	# first pass is for local mehtods only
-	for i in range(methods.size()):
-		# 65 is a magic number for methods in script, though documentation
-		# says 64.  This picks up local overloads of base class methods too.
-		if(methods[i].flags == 65):
-			script_methods.add_local_method(methods[i])
+	var params = _utils.StubParams.new(parsed.script_path, method_name, parsed.subpath)
+	params.to_call_super()
+	_stubber.add_stub(params)
 
 
-	if(_strategy == _utils.DOUBLE_STRATEGY.FULL):
-		if(_utils.is_version_30()):
-			# second pass is for anything not local
-			for i in range(methods.size()):
-				# 65 is a magic number for methods in script, though documentation
-				# says 64.  This picks up local overloads of base class methods too.
-				if(methods[i].flags != 65):
-					script_methods.add_built_in_method(methods[i])
+func _get_base_script_text(parsed, override_path, partial, included_methods):
+	var path = parsed.script_path
+	if(override_path != null):
+		path = override_path
+
+	var stubber_id = -1
+	if(_stubber != null):
+		stubber_id = _stubber.get_instance_id()
+
+	var spy_id = -1
+	if(_spy != null):
+		spy_id = _spy.get_instance_id()
+
+	var gut_id = -1
+	if(_gut != null):
+		gut_id = _gut.get_instance_id()
+
+	var extends_text  = parsed.get_extends_text()
+
+	var values = {
+		# Top  sections
+		"extends":extends_text,
+		"constants":'',#obj_info.get_constants_text(),
+		"properties":'',#obj_info.get_properties_text(),
+
+		# metadata values
+		"path":path,
+		"subpath":GutUtils.nvl(parsed.subpath, ''),
+		"stubber_id":stubber_id,
+		"spy_id":spy_id,
+		"gut_id":gut_id,
+		"singleton_name":'',#GutUtils.nvl(obj_info.get_singleton_name(), ''),
+		"is_partial":partial,
+		"doubled_methods":included_methods,
+	}
+
+	return _base_script_text.format(values)
+
+
+func _is_method_eligible_for_doubling(parsed_script, parsed_method):
+	return !parsed_method.is_accessor() and \
+		parsed_method.is_eligible_for_doubling() and \
+		!_ignored_methods.has(parsed_script.resource, parsed_method.meta.name)
+
+
+# Disable the native_method_override setting so that doubles do not generate
+# errors or warnings when doubling with INCLUDE_NATIVE or when a method has
+# been added because of param_count stub.
+func _create_script_no_warnings(src):
+	var prev_native_override_value = null
+	var native_method_override = 'debug/gdscript/warnings/native_method_override'
+	prev_native_override_value = ProjectSettings.get_setting(native_method_override)
+	ProjectSettings.set_setting(native_method_override, 0)
+
+	var DblClass = _utils.create_script_from_source(src)
+
+	ProjectSettings.set_setting(native_method_override, prev_native_override_value)
+	return DblClass
+
+
+func _create_double(parsed, strategy, override_path, partial):
+	var path = ""
+
+	path = parsed.script_path
+	var dbl_src = ""
+	var included_methods = []
+
+	for method in parsed.get_local_methods():
+		if(_is_method_eligible_for_doubling(parsed, method)):
+			included_methods.append(method.meta.name)
+			var mthd = parsed.get_local_method(method.meta.name)
+			if(parsed.is_native):
+				dbl_src += _get_func_text(method.meta, parsed.resource)
+			else:
+				dbl_src += _get_func_text(method.meta, path)
+
+	if(strategy == _utils.DOUBLE_STRATEGY.INCLUDE_NATIVE):
+		for method in parsed.get_super_methods():
+			if(_is_method_eligible_for_doubling(parsed, method)):
+				included_methods.append(method.meta.name)
+				_stub_to_call_super(parsed, method.meta.name)
+				if(parsed.is_native):
+					dbl_src += _get_func_text(method.meta, parsed.resource)
+				else:
+					dbl_src += _get_func_text(method.meta, path)
+
+	var base_script = _get_base_script_text(parsed, override_path, partial, included_methods)
+	dbl_src = base_script + "\n\n" + dbl_src
+
+
+	if(print_source):
+		print(_utils.add_line_numbers(dbl_src))
+
+	var DblClass = _create_script_no_warnings(dbl_src)
+	if(_stubber != null):
+		_stub_method_default_values(DblClass, parsed, strategy)
+
+	return DblClass
+
+
+func _stub_method_default_values(which, parsed, strategy):
+	for method in parsed.get_local_methods():
+		if(method.is_eligible_for_doubling() && !_ignored_methods.has(parsed.resource, method.meta.name)):
+			_stubber.stub_defaults_from_meta(parsed.script_path, method.meta)
+
+
+
+func _double_scene_and_script(scene, strategy, partial):
+	var to_return = PackedSceneDouble.new()
+	to_return.load_scene(scene.get_path())
+
+	var script_obj = GutUtils.get_scene_script_object(scene)
+	if(script_obj != null):
+		var script_dbl = null
+		if(partial):
+			script_dbl = _partial_double(script_obj, strategy, scene.get_path())
 		else:
-			_lgr.warn('Full doubling is disabled in 3.1')
+			script_dbl = _double(script_obj, strategy, scene.get_path())
+		to_return.set_script_obj(script_dbl)
 
-	return script_methods
+	return to_return
+
 
 func _get_inst_id_ref_str(inst):
 	var ref_str = 'null'
@@ -219,167 +246,111 @@ func _get_inst_id_ref_str(inst):
 		ref_str = str('instance_from_id(', inst.get_instance_id(),')')
 	return ref_str
 
-func _get_stubber_metadata_text(obj_info, override_path = null):
-	var path = obj_info.get_path()
-	if(override_path != null):
-		path = override_path
-	return "var __gut_metadata_ = {\n" + \
-           "\tpath='" + path + "',\n" + \
-		   "\tsubpath='" + obj_info.get_subpath() + "',\n" + \
-		   "\tstubber=" + _get_inst_id_ref_str(_stubber) + ",\n" + \
-		   "\tspy=" + _get_inst_id_ref_str(_spy) + "\n" + \
-           "}\n"
 
-func _get_spy_text(method_hash):
-	var txt = ''
-	if(_spy):
-		var called_with = _method_maker.get_spy_call_parameters_text(method_hash)
-		txt += "\t__gut_metadata_.spy.add_call(self, '" + method_hash.name + "', " + called_with + ")\n"
-	return txt
+func _get_func_text(method_hash, path):
+	var override_count = null;
+	if(_stubber != null):
+		override_count = _stubber.get_parameter_count(path, method_hash.name)
 
-func _get_func_text(method_hash):
-	var ftxt = _method_maker.get_decleration_text(method_hash) + "\n"
+	var text = _method_maker.get_function_text(method_hash, override_count) + "\n"
 
-	var called_with = _method_maker.get_spy_call_parameters_text(method_hash)
-	ftxt += _get_spy_text(method_hash)
+	return text
 
-	if(_stubber and method_hash.name != '_init'):
-		ftxt += "\treturn __gut_metadata_.stubber.get_return(self, '" + method_hash.name + "', " + called_with + ")\n"
+
+func _parse_script(obj):
+	var parsed = null
+
+	if(_utils.is_inner_class(obj)):
+		if(inner_class_registry.has(obj)):
+			parsed = _script_collector.parse(inner_class_registry.get_base_resource(obj), obj)
+		else:
+			_lgr.error('Doubling Inner Classes requires you register them first.  Call register_inner_classes passing the script that contains the inner class.')
 	else:
-		ftxt += "\tpass\n"
+		parsed = _script_collector.parse(obj)
 
-	return ftxt
+	return parsed
 
-func _get_super_func_text(method_hash):
-	var call_method = _method_maker.get_super_call_text(method_hash)
 
-	var call_super_text = str("return ", call_method, "\n")
+# Override path is used with scenes.
+func _double(obj, strategy, override_path=null):
+	var parsed = _parse_script(obj)
+	if(parsed != null):
+		return _create_double(parsed, strategy, override_path, false)
 
-	var ftxt = _method_maker.get_decleration_text(method_hash) + "\n"
-	ftxt += _get_spy_text(method_hash)
 
-	ftxt += _get_indented_line(1, call_super_text)
+func _partial_double(obj, strategy, override_path=null):
+	var parsed = _parse_script(obj)
+	if(parsed != null):
+		return _create_double(parsed, strategy, override_path, true)
 
-	return ftxt
 
-# returns the path to write the double file to
-func _get_temp_path(object_info):
-	var file_name = object_info.get_path().get_file().get_basename()
-	var extension = object_info.get_path().get_extension()
-
-	if(object_info.has_subpath()):
-		file_name += '__' + object_info.get_subpath().replace('/', '__')
-
-	if(_use_unique_names):
-		file_name += str('__dbl', _double_count, '__.', extension)
-	else:
-		file_name += '.' + extension
-
-	var to_return = _output_dir.plus_file(file_name)
-	return to_return
-
-func _double(obj_info, override_path=null):
-	var temp_path = _get_temp_path(obj_info)
-	_write_file(obj_info, temp_path, override_path)
-	_double_count += 1
-	return temp_path
-
-# ###############
+# -------------------------
 # Public
-# ###############
-func get_output_dir():
-	return _output_dir
-
-func set_output_dir(output_dir):
-	_output_dir = output_dir
-	var d = Directory.new()
-	d.make_dir_recursive(output_dir)
-
-func get_spy():
-	return _spy
-
-func set_spy(spy):
-	_spy = spy
-
-func get_stubber():
-	return _stubber
-
-func set_stubber(stubber):
-	_stubber = stubber
-
-func get_logger():
-	return _lgr
-
-func set_logger(logger):
-	_lgr = logger
-	_method_maker.set_logger(logger)
-
-func get_strategy():
-	return _strategy
-
-func set_strategy(strategy):
-	_strategy = strategy
-
-# double a scene
-func double_scene(path, strategy=_strategy):
-	_temp_strategy(strategy)
-
-	var oi = ObjectInfo.new(path)
-	var temp_path = _get_temp_path(oi)
-	_double_scene_and_script(path, temp_path)
-
-	_restore_strategy()
-	return load(temp_path)
+# -------------------------
 
 # double a script/object
-func double(path, strategy=_strategy):
-	_temp_strategy(strategy)
+func double(obj, strategy=_strategy):
+	return _double(obj, strategy)
 
-	var oi = ObjectInfo.new(path)
-	var to_return = load(_double(oi))
+func partial_double(obj, strategy=_strategy):
+	return _partial_double(obj, strategy)
 
-	_restore_strategy()
-	return to_return
 
-# double an inner class in a script
-func double_inner(path, subpath, strategy=_strategy):
-	_temp_strategy(strategy)
+# double a scene
+func double_scene(scene, strategy=_strategy):
+	return _double_scene_and_script(scene, strategy, false)
 
-	var oi = ObjectInfo.new(path, subpath)
-	var to_return = load(_double(oi))
+func partial_double_scene(scene, strategy=_strategy):
+	return _double_scene_and_script(scene, strategy, true)
 
-	_restore_strategy()
-	return to_return
 
-func clear_output_directory():
-	var did = false
-	if(_output_dir.find('user://') == 0):
-		var d = Directory.new()
-		var result = d.open(_output_dir)
-		# BIG GOTCHA HERE.  If it cannot open the dir w/ erro 31, then the
-		# directory becomes res:// and things go on normally and gut clears out
-		# out res:// which is SUPER BAD.
-		if(result == OK):
-			d.list_dir_begin(true)
-			var files = []
-			var f = d.get_next()
-			while(f != ''):
-				d.remove(f)
-				f = d.get_next()
-				did = true
-	return did
+func double_gdnative(which):
+	return _double(which, _utils.DOUBLE_STRATEGY.INCLUDE_NATIVE)
 
-func delete_output_directory():
-	var did = clear_output_directory()
-	if(did):
-		var d = Directory.new()
-		d.remove(_output_dir)
+func partial_double_gdnative(which):
+	return _partial_double(which, _utils.DOUBLE_STRATEGY.INCLUDE_NATIVE)
 
-# When creating doubles a unique name is used that each double can be its own
-# thing.  Sometimes, for testing, we do not want to do this so this allows
-# you to turn off creating unique names for each double class.
+
+func double_inner(parent, inner, strategy=_strategy):
+	var parsed = _script_collector.parse(parent, inner)
+	return _create_double(parsed, strategy, null, false)
+
+
+func partial_double_inner(parent, inner, strategy=_strategy):
+	var parsed = _script_collector.parse(parent, inner)
+	return _create_double(parsed, strategy, null, true)
+
+
+func add_ignored_method(obj, method_name):
+	_ignored_methods.add(obj, method_name)
+
+
+
+# ##############################################################################
+#(G)odot (U)nit (T)est class
 #
-# THIS SHOULD NEVER BE USED OUTSIDE OF INTERNAL GUT TESTING.  It can cause
-# weird, hard to track down problems.
-func set_use_unique_names(should):
-	_use_unique_names = should
+# ##############################################################################
+# The MIT License (MIT)
+# =====================
+#
+# Copyright (c) 2024 Tom "Butch" Wesley
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+#
+# ##############################################################################

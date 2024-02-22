@@ -153,7 +153,7 @@
 		visited every tile it can reach, so try not to path to the impossible.
 	
 """
-extends Reference
+extends RefCounted
 
 var HexCell = preload("./HexCell.gd")
 # Duplicate these from HexCell for ease of access
@@ -166,7 +166,7 @@ const DIR_NW = Vector3(-1, 1, 0)
 const DIR_ALL = [DIR_N, DIR_NE, DIR_SE, DIR_S, DIR_SW, DIR_NW]
 
 # Allow the user to scale the hex for fake perspective or somesuch
-export(Vector2) var hex_scale = Vector2(1, 1) setget set_hex_scale
+@export var hex_scale:Vector2 = Vector2(1, 1): set = set_hex_scale
 
 var base_hex_size = Vector2(1, sqrt(3)/2)
 var hex_size
@@ -349,7 +349,7 @@ func find_path(start, goal, exceptions=[]):
 	var frontier = [make_priority_item(start, 0)]
 	var came_from = {start: null}
 	var cost_so_far = {start: 0}
-	while not frontier.empty():
+	while not frontier.is_empty():
 		var current = frontier.pop_front().v
 		if current == goal:
 			break
@@ -372,7 +372,7 @@ func find_path(start, goal, exceptions=[]):
 				var priority = next_cost + next_hex.distance_to(goal)
 				# Insert into the frontier
 				var item = make_priority_item(next, priority)
-				var idx = frontier.bsearch_custom(item, self, "comp_priority_item")
+				var idx = frontier.bsearch_custom(item, comp_priority_item)
 				frontier.insert(idx, item)
 				came_from[next] = current
 	
